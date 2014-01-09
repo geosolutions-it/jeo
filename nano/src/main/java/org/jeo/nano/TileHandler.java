@@ -1,3 +1,17 @@
+/* Copyright 2013 The jeo project. All rights reserved.
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *      http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
 package org.jeo.nano;
 
 import static org.jeo.nano.NanoHTTPD.HTTP_INTERNALERROR;
@@ -30,8 +44,7 @@ public class TileHandler extends Handler {
 
     /* /tiles/<workspace>/<layer>/<z>/<x>/<y>.<format.  */
     static final Pattern TILES_URI_RE = Pattern.compile( 
-        //"/tiles/([^/]+)/([^/]+)/(\\d+)/+(\\d+)/+(\\d+).(\\w+)", Pattern.CASE_INSENSITIVE);
-        "/tiles/((?:[\\w]+/)?[\\w]+)(?:/(\\d+)/+(\\d+)/+(\\d+))?.(\\w+)", Pattern.CASE_INSENSITIVE);
+        "/tiles(?:/([\\w-]+)(?:/([\\w-]+)))(?:/(\\d+)/+(\\d+)/+(\\d+))?(?:\\.(\\w+))?", Pattern.CASE_INSENSITIVE);
     
     @Override
     public boolean canHandle(Request request, NanoServer server) {
@@ -41,8 +54,8 @@ public class TileHandler extends Handler {
     @Override
     public Response handle(Request request, NanoServer server) {
         try {
-            Pair<TileDataset,Workspace> p = findTileLayer(request, server);
-            TileDataset layer = p.first();
+            Pair<Workspace, TileDataset> p = findTileLayer(request, server);
+            TileDataset layer = p.second();
 
             try {
                 //get the tile index
@@ -81,7 +94,7 @@ public class TileHandler extends Handler {
             }
             finally {
                 layer.close();
-                Workspace ws = p.second();
+                Workspace ws = p.first();
                 if (ws != null) {
                     ws.close();
                 }
@@ -114,7 +127,7 @@ public class TileHandler extends Handler {
 
         Map<String,String> vars = new HashMap<String, String>();
         vars.put("name", layer.getName());
-        vars.put("path", parseLayerPath(request));
+        vars.put("path", createPath(request));
         vars.put("max_bbox", Envelopes.toString(layer.bounds()));
         
         vars.put("bbox", Envelopes.toString(layer.pyramid().bounds(tile)));
@@ -138,36 +151,29 @@ public class TileHandler extends Handler {
         }
     }
 
-    Pair<TileDataset,Workspace> findTileLayer(Request request, NanoServer server) throws IOException {
-        String path = parseLayerPath(request);
-        Pair<Dataset,Workspace> p = findDataset(path, server.getRegistry());
+    Pair<Workspace, TileDataset> findTileLayer(Request request, NanoServer server) throws IOException {
+        Pair<Workspace, ? extends Dataset> p = findWorkspaceOrDataset(request, server.getRegistry());
         
-        Dataset l = p.first();
-        if (!(l instanceof TileDataset)) {
+        if (!(p.second() instanceof TileDataset)) {
             // not a tile set
-            throw new HttpException(HTTP_NOTFOUND, "No such tile layer: " + path);
+            throw new HttpException(HTTP_NOTFOUND, "No such tile layer at: " + request.getUri());
         }
 
-        return Pair.of((TileDataset)l, p.second());
-    }
-
-    String parseLayerPath(Request request) {
-        Matcher m = (Matcher) request.getContext().get(Matcher.class);
-        return m.group(1);
+        return (Pair<Workspace, TileDataset>) p;
     }
 
     String parseFormat(Request request) throws IOException {
         Matcher m = (Matcher) request.getContext().get(Matcher.class);
-        return m.group(5);
+        return m.group(6);
     }
 
     Tile parseTileIndex(Request request) throws IOException {
         Matcher m = (Matcher) request.getContext().get(Matcher.class);
 
-        if (m.group(2) != null) {
-            int z = Integer.parseInt(m.group(2));
-            int x = Integer.parseInt(m.group(3));
-            int y = Integer.parseInt(m.group(4));
+        if (m.group(3) != null) {
+            int z = Integer.parseInt(m.group(3));
+            int x = Integer.parseInt(m.group(4));
+            int y = Integer.parseInt(m.group(5));
             return new Tile(z, x, y);   
         }
         

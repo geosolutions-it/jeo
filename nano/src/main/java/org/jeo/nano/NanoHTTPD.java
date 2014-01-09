@@ -1,3 +1,17 @@
+/* Copyright 2013 The jeo project. All rights reserved.
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *      http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
 package org.jeo.nano;
 
 import java.io.BufferedReader;
@@ -23,8 +37,11 @@ import java.util.Properties;
 import java.util.StringTokenizer;
 import java.util.TimeZone;
 import java.util.Vector;
+import java.util.concurrent.ExecutionException;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
+import java.util.logging.Level;
+import java.util.logging.Logger;
 
 /**
  * A simple, tiny, nicely embeddable HTTP 1.0 (partially 1.1) server in Java
@@ -237,8 +254,9 @@ public class NanoHTTPD
 				{
 					try
 					{
-						while( true )
-							new HTTPSession( myServerSocket.accept());
+						while( true ) {
+                            myThreadPool.submit(new HTTPSession(myServerSocket.accept()));
+                        }
 					}
 					catch ( IOException ioe )
 					{}
@@ -324,9 +342,6 @@ public class NanoHTTPD
 		public HTTPSession( Socket s )
 		{
 			mySocket = s;
-			Thread t = new Thread( this );
-			t.setDaemon( true );
-			t.start();
 		}
 
 		public void run()

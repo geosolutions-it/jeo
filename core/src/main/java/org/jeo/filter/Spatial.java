@@ -1,3 +1,17 @@
+/* Copyright 2013 The jeo project. All rights reserved.
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *      http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
 package org.jeo.filter;
 
 import org.jeo.geom.Envelopes;
@@ -12,13 +26,13 @@ import com.vividsolutions.jts.geom.Geometry;
  * 
  * TODO: use prepared geometries
  */
-public class Spatial extends Filter {
+public class Spatial<T> extends Filter<T> {
 
     /**
      * Spatial operator type.  
      */
     public static enum Type {
-        INTERSECT, TOUCH, DISJOINT, OVERLAP, CROSS, COVER, WITHIN;
+        INTERSECT, TOUCH, DISJOINT, OVERLAP, CROSS, COVER, WITHIN, CONTAIN, BBOX;
     }
 
     Type type;
@@ -43,7 +57,7 @@ public class Spatial extends Filter {
     }
 
     @Override
-    public boolean apply(Object obj) {
+    public boolean apply(T obj) {
         Object o1 = left.evaluate(obj);
         Object o2 = right.evaluate(obj);
 
@@ -53,6 +67,14 @@ public class Spatial extends Filter {
     protected boolean compare(Object o1, Object o2) {
         if (o1 == null || o2 == null) {
             throw new IllegalArgumentException("Unable to perform comparison on null operand(s)");
+        }
+
+        if (type == Type.BBOX) {
+            // only need to compare envelopes
+            Envelope e1 = toEnvelope(o1);
+            Envelope e2 = toEnvelope(o2);
+
+            return e1.intersects(e2);
         }
 
         Geometry g1 = toGeometry(o1);
@@ -73,9 +95,24 @@ public class Spatial extends Filter {
             return g1.covers(g2);
         case WITHIN:
             return g1.within(g2);
+        case CONTAIN:
+            return g1.contains(g2);
         default:
             throw new IllegalStateException();
         }
+    }
+
+    protected Envelope toEnvelope(Object o) {
+        if (o instanceof Envelope) {
+            return (Envelope) o;
+        }
+
+        Geometry g = toGeometry(o);
+        if (g == null) {
+            throw new IllegalArgumentException("Unable to convert " + o + " to envelope");
+        }
+
+        return g.getEnvelopeInternal();
     }
 
     protected Geometry toGeometry(Object o) {
@@ -112,7 +149,7 @@ public class Spatial extends Filter {
             return false;
         if (getClass() != obj.getClass())
             return false;
-        Spatial other = (Spatial) obj;
+        Spatial<?> other = (Spatial<?>) obj;
         if (left == null) {
             if (other.left != null)
                 return false;

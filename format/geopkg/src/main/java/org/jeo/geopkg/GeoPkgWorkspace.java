@@ -1,15 +1,36 @@
+/* Copyright 2013 The jeo project. All rights reserved.
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *      http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
 package org.jeo.geopkg;
 
 import static java.lang.String.format;
 
+import java.io.BufferedReader;
 import java.io.File;
 import java.io.IOException;
+import java.io.InputStream;
+import java.io.InputStreamReader;
 import java.sql.Connection;
+import java.sql.DatabaseMetaData;
 import java.sql.PreparedStatement;
 import java.sql.ResultSet;
 import java.sql.ResultSetMetaData;
 import java.sql.SQLException;
+import java.sql.Statement;
+import java.sql.Types;
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.Collection;
 import java.util.Date;
 import java.util.List;
@@ -20,8 +41,8 @@ import javax.sql.DataSource;
 import org.jeo.data.Cursor;
 import org.jeo.data.Cursors;
 import org.jeo.data.Dataset;
-import org.jeo.data.DatasetHandle;
 import org.jeo.data.FileData;
+import org.jeo.data.Handle;
 import org.jeo.data.Query;
 import org.jeo.data.QueryPlan;
 import org.jeo.data.Tile;
@@ -35,12 +56,15 @@ import org.jeo.feature.Field;
 import org.jeo.feature.Schema;
 import org.jeo.feature.SchemaBuilder;
 import org.jeo.filter.Filter;
+import org.jeo.filter.Filters;
 import org.jeo.geom.Envelopes;
 import org.jeo.geom.Geom;
 import org.jeo.geopkg.Entry.DataType;
 import org.jeo.geopkg.geom.GeoPkgGeomWriter;
 import org.jeo.proj.Proj;
 import org.jeo.sql.DbOP;
+import org.jeo.sql.PrimaryKey;
+import org.jeo.sql.PrimaryKeyColumn;
 import org.jeo.sql.SQL;
 import org.jeo.util.Key;
 import org.jeo.util.Pair;
@@ -100,12 +124,82 @@ public class GeoPkgWorkspace implements Workspace, FileData {
 
         dbtypes = new GeoPkgTypes();
         geomWriter = new GeoPkgGeomWriter();
+
+        init();
     }
 
     DataSource createDataSource(GeoPkgOpts opts) {
         SQLiteDataSource dataSource = new SQLiteDataSource();
         dataSource.setUrl("jdbc:sqlite:" + opts.getFile().getPath());
         return dataSource;
+    }
+
+    void init() throws IOException {
+        run(new DbOP<Void>() {
+            @Override
+            protected Void doRun(Connection cx) throws Exception {
+              // create the necessary metadata tables
+              runScript(SPATIAL_REF_SYS + ".sql", cx);
+              runScript(GEOMETRY_COLUMNS + ".sql", cx);
+              runScript(GEOPACKAGE_CONTENTS + ".sql", cx);
+              runScript(TILE_TABLE_METADATA +".sql", cx);
+              runScript(TILE_MATRIX_METADATA + ".sql", cx);
+              return null;
+            }
+        });
+    }
+
+    void runScript(String file, Connection cx) throws IOException, SQLException {
+        List<String> lines = readScript(file);
+
+        Statement st = cx.createStatement();
+
+        try {
+            StringBuilder buf = new StringBuilder();
+            for (String sql : lines) {
+                sql = sql.trim();
+                if (sql.isEmpty()) {
+                    continue;
+                }
+                if (sql.startsWith("--")) {
+                    continue;
+                }
+                buf.append(sql).append(" ");
+
+                if (sql.endsWith(";")) {
+                    String stmt = buf.toString();
+                    boolean skipError = stmt.startsWith("?");
+                    if (skipError) {
+                        stmt = stmt.replaceAll("^\\? *" ,"");
+                    }
+
+                    LOG.debug(stmt);
+                    st.addBatch(stmt);
+
+                    buf.setLength(0);
+                }
+            }
+            st.executeBatch();
+        }
+        finally {
+            st.close();
+        }
+    }
+
+    List<String> readScript(String file) throws IOException {
+        InputStream in = getClass().getResourceAsStream(file);
+        BufferedReader r = new BufferedReader(new InputStreamReader(in));
+        try {
+            List<String> lines = new ArrayList<String>();
+            String line = null;
+            while((line = r.readLine()) != null) {
+                lines.add(line);
+            }
+            return lines;
+        }
+        finally {
+            r.close();
+        }
     }
 
     @Override
@@ -127,18 +221,17 @@ public class GeoPkgWorkspace implements Workspace, FileData {
     }
 
     @Override
-    public Iterable<DatasetHandle> list() throws IOException {
-        return run(new DbOP<List<DatasetHandle>>() {
+    public Iterable<Handle<Dataset>> list() throws IOException {
+        return run(new DbOP<List<Handle<Dataset>>>() {
             @Override
-            protected List<DatasetHandle> doRun(Connection cx) throws Exception {
+            protected List<Handle<Dataset>> doRun(Connection cx) throws Exception {
                 String sql = format("SELECT table_name FROM %s", GEOPACKAGE_CONTENTS);
                 log(sql);
 
                 ResultSet rs = open(open(cx.createStatement()).executeQuery(sql));
-                List<DatasetHandle> refs = new ArrayList<DatasetHandle>();
+                List<Handle<Dataset>> refs = new ArrayList<Handle<Dataset>>();
                 while(rs.next()) {
-                    refs.add(new DatasetHandle(rs.getString(1), Dataset.class, getDriver(), 
-                        GeoPkgWorkspace.this));
+                    refs.add(Handle.to(rs.getString(1), GeoPkgWorkspace.this));
                 }
                 return refs;
             }
@@ -259,8 +352,6 @@ public class GeoPkgWorkspace implements Workspace, FileData {
                 return new FeatureAppendCursor(cx, entry, this);
             }
 
-            Schema schema = schema(entry);
-
             QueryPlan qp = new QueryPlan(q);
 
             //TODO: handle selective fields
@@ -272,7 +363,7 @@ public class GeoPkgWorkspace implements Workspace, FileData {
 
             ResultSet rs = ps.executeQuery();
 
-            Cursor<Feature> c = new FeatureCursor(rs, cx, schema);
+            Cursor<Feature> c = new FeatureCursor(q.getMode(), rs, cx, entry, this);
 
             if (!Envelopes.isNull(q.getBounds())) {
                 c = Cursors.intersects(c, q.getBounds());
@@ -289,9 +380,10 @@ public class GeoPkgWorkspace implements Workspace, FileData {
         GeoPkgFilterSQLEncoder sqlfe = new GeoPkgFilterSQLEncoder();
         sqlfe.setDbTypes(dbtypes);
 
-        if (!Filter.isTrueOrNull(q.getFilter())) {
+        if (!Filters.isTrueOrNull(q.getFilter())) {
             try {
-                sql.add(" WHERE ").add(sqlfe.encode(q.getFilter(), null));
+                String where = sqlfe.encode(q.getFilter(), null);
+                sql.add(" WHERE ").add(where);
                 qp.filtered();
             }
             catch(Exception e) {
@@ -301,11 +393,15 @@ public class GeoPkgWorkspace implements Workspace, FileData {
 
         if (q.getLimit() != null) {
             sql.add(" LIMIT ").add(q.getLimit());
-            qp.offsetted();
+            qp.limited();
         }
         if (q.getOffset() != null) {
+            //sqlite doesn't understand offset without limit
+            if (q.getLimit() == null) {
+                sql.add(" LIMIT -1");
+            }
             sql.add(" OFFSET ").add(q.getOffset());
-            qp.limited();
+            qp.offsetted();
         }
 
         List<Object> args = new ArrayList<Object>();
@@ -315,11 +411,11 @@ public class GeoPkgWorkspace implements Workspace, FileData {
         return args;
     }
 
-    public void add(final FeatureEntry entry, final Feature feature) throws IOException {
+    void insert(final FeatureEntry entry, final Feature feature, Connection cx) throws IOException {
         run(new DbOP<Boolean>() {
             @Override
             protected Boolean doRun(Connection cx) throws Exception {
-                Feature f = Features.retype(feature, schema(entry));
+                Feature f = Features.retype(feature, schema(entry, cx));
 
                 SQL sqlb = new SQL("INSERT INTO ").name(entry.getTableName()).add(" (");
                 List<Object> objs = new ArrayList<Object>();
@@ -343,8 +439,57 @@ public class GeoPkgWorkspace implements Workspace, FileData {
 
                 return open(prepareStatement(sql, objs, cx)).execute();
             }
-        });
-        
+        }, cx);
+    }
+
+    void update(final FeatureEntry entry, final Feature feature, Connection cx) throws IOException {
+        run(new DbOP<Boolean>() {
+            @Override
+            protected Boolean doRun(Connection cx) throws Exception {
+                SQL sqlb = new SQL("UPDATE ").name(entry.getTableName()).add(" SET ");
+                List<Object> objs = new ArrayList<Object>();
+
+                for (Map.Entry<String, Object> kv : feature.map().entrySet()) {
+                    Object obj = kv.getValue();
+                    if (obj == null) {
+                        //TODO: revisit this, this doesn't allow us to null a property
+                        continue;
+                    }
+
+                    sqlb.name(kv.getKey()).add(" = ?, ");
+                    objs.add(kv.getValue());
+                }
+               
+                if (objs.isEmpty()) {
+                    return false;
+                }
+
+                sqlb.trim(2);
+
+                PrimaryKeyColumn pk = primaryKey(entry, cx).getColumns().get(0);
+                sqlb.add(" WHERE ").name(pk.getName()).add(" = ?");
+                objs.add(feature.getId());
+
+                String sql = sqlb.toString();
+                log(sql, objs);
+
+                return open(prepareStatement(sql, objs, cx)).execute();
+            }
+        }, cx);
+    }
+
+    void delete(final FeatureEntry entry, final Feature feature, Connection cx) throws IOException {
+        run(new DbOP<Boolean>() {
+            @Override
+            protected Boolean doRun(Connection cx) throws Exception {
+                String sql = new SQL("DELETE FROM ").name(entry.getTableName()).add(" WHERE ")
+                    .name(primaryKeyCol(entry, cx).getName()).add(" = ?").toString();
+                List objs = Arrays.asList(feature.getId());
+                log(sql, objs);
+
+                return open(prepareStatement(sql, objs, cx)).execute();
+            }
+        }, cx);
     }
 
     public GeoPkgVector create(Schema schema) throws IOException {
@@ -572,10 +717,10 @@ public class GeoPkgWorkspace implements Workspace, FileData {
         return e;
     }
 
-    public Schema schema(FeatureEntry entry) throws IOException {
+    public Schema schema(FeatureEntry entry, Connection cx) throws IOException {
         if (entry.getSchema() == null) {
             try {
-                entry.setSchema(createSchema(entry));
+                entry.setSchema(createSchema(entry, cx));
             } catch (Exception e) {
                 throw new IOException(e);
             }
@@ -583,11 +728,31 @@ public class GeoPkgWorkspace implements Workspace, FileData {
         return entry.getSchema();
     }
 
-    Schema createSchema(final FeatureEntry entry) throws Exception {
+    public PrimaryKey primaryKey(FeatureEntry entry, Connection cx) throws IOException {
+        if (entry.getPrimaryKey() == null) {
+            try {
+                entry.setPrimaryKey(createPrimaryKey(entry, cx));
+            }
+            catch(Exception e) {
+                throw new IOException(e);
+            }
+        }
+        return entry.getPrimaryKey();
+    }
+ 
+    public PrimaryKeyColumn primaryKeyCol(FeatureEntry entry, Connection cx) throws IOException {
+        // geopackage spec mandates a single primary key column in all cases, but we could be safe
+        // and do a check anyways
+        return primaryKey(entry, cx).getColumns().get(0);
+    }
+
+    Schema createSchema(final FeatureEntry entry, Connection cx) throws Exception {
         return run(new DbOP<Schema>() {
             @Override
             protected Schema doRun(Connection cx) throws Exception {
-                String sql = format("SELECT * FROM %s LIMIT 1", entry.getTableName());
+                String tableName = entry.getTableName();
+
+                String sql = format("SELECT * FROM %s LIMIT 1", tableName);
                 log(sql);
 
                 ResultSet rs = open(open(cx.createStatement()).executeQuery(sql));
@@ -607,7 +772,41 @@ public class GeoPkgWorkspace implements Workspace, FileData {
                 }
                 return sb.schema();
             }
-        });
+        }, cx);
+    }
+
+    PrimaryKey createPrimaryKey(final FeatureEntry entry, Connection cx) throws Exception {
+        final Schema schema = schema(entry, cx);
+
+        return run(new DbOP<PrimaryKey>() {
+            @Override
+            protected PrimaryKey doRun(Connection cx) throws Exception {
+                DatabaseMetaData md = cx.getMetaData();
+                ResultSet pk = open(md.getPrimaryKeys(null, "", entry.getTableName()));
+
+                List<PrimaryKeyColumn> cols = new ArrayList<PrimaryKeyColumn>();
+                while(pk.next()) {
+                    final String name = pk.getString("COLUMN_NAME");
+                    if (name == null) {
+                        continue;
+                    }
+
+                    Field fld = schema.field(name);
+
+                    PrimaryKeyColumn col = new PrimaryKeyColumn(name, fld);
+                    col.setAutoIncrement(true);  // sqlite primary keys always auto increment
+                    cols.add(col);
+                }
+
+                if (cols.isEmpty()) {
+                    return null;
+                }
+
+                PrimaryKey pkey = new PrimaryKey();
+                pkey.getColumns().addAll(cols);
+                return pkey;
+            }
+        }, cx);
     }
 
     /**
@@ -772,21 +971,27 @@ public class GeoPkgWorkspace implements Workspace, FileData {
 
         for (int i = 0; i < args.size(); i++) {
             Object obj = args.get(i);
-            if (obj instanceof Geometry) {
-                ps.setBytes(i+1, geomWriter.write((Geometry)obj));
+            int j = i+1;
+            if (obj == null) {
+                ps.setNull(j, Types.VARCHAR); 
             }
             else {
-                if (obj instanceof Byte || obj instanceof Short || obj instanceof Integer) {
-                    ps.setInt(i+1, ((Number)obj).intValue());
-                }
-                if (obj instanceof Long) {
-                    ps.setLong(i+1, ((Number)obj).longValue());
-                }
-                if (obj instanceof Float || obj instanceof Double) {
-                    ps.setDouble(i+1, ((Number)obj).doubleValue());
+                if (obj instanceof Geometry) {
+                    ps.setBytes(j, geomWriter.write((Geometry)obj));
                 }
                 else {
-                    ps.setString(i+1, obj.toString());
+                    if (obj instanceof Byte || obj instanceof Short || obj instanceof Integer) {
+                        ps.setInt(j, ((Number)obj).intValue());
+                    }
+                    else if (obj instanceof Long) {
+                        ps.setLong(j, ((Number)obj).longValue());
+                    }
+                    else if (obj instanceof Float || obj instanceof Double) {
+                        ps.setDouble(j, ((Number)obj).doubleValue());
+                    }
+                    else {
+                        ps.setString(j, obj.toString());
+                    }
                 }
             }
         }
@@ -799,7 +1004,7 @@ public class GeoPkgWorkspace implements Workspace, FileData {
     }
 
     <T> T run(DbOP<T> op, Connection cx) throws IOException {
-        return op.run(cx);
+        return cx != null ? op.run(cx) : run(op);
     }
 
     String log(String sql, Object... params) {

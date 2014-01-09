@@ -1,7 +1,22 @@
+/* Copyright 2013 The jeo project. All rights reserved.
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *      http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
 package org.jeo.filter.cql;
 
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertTrue;
+import static org.junit.Assert.fail;
 
 import org.jeo.filter.Comparison;
 import org.jeo.filter.Filter;
@@ -64,5 +79,26 @@ public class CQLTest {
         Filter f = CQL.parse("IN ('foo.1', 'foo.2')");
         assertTrue(f instanceof Id);
     }
-     
+
+    @Test
+    public void testInvalidCQL() throws ParseException {
+        try {
+            CQL.parse("STATE_NAME+EQ+'Virginia");
+        } catch (ParseException pe) {
+            assertEquals("Invalid CQL syntax: Lexical error at line 1, column 24."
+                    + "  Encountered: <EOF> after : \"\\'Virginia\"", pe.getMessage());
+        } catch (Exception ex) {
+            ex.printStackTrace();
+            fail("expected to catch ParseException, got : " + ex.getClass());
+        }
+    }
+
+    @Test
+    public void testBBOX() throws ParseException {
+        //Filter f = CQL.parse("BBOX(pp,30, -125, 40, -110)");
+        //assertTrue(f instanceof Spatial);
+
+        Filter f = CQL.parse("BBOX(pp,30, -125, 40, -110,'EPSG:4326')");
+        assertTrue(f instanceof Spatial);
+    }
 }

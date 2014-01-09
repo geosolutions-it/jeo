@@ -1,3 +1,17 @@
+/* Copyright 2013 The jeo project. All rights reserved.
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *      http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
 package org.jeo.data;
 
 import static org.junit.Assert.*;
@@ -91,6 +105,10 @@ public abstract class VectorApiTestBase {
         assertEquals(1, data.count(new Query().filter("P_MALE > P_FEMALE AND SAMP_POP > 200000")));
         assertEquals(5, data.count(new Query().filter("P_MALE > P_FEMALE OR SAMP_POP > 2000000")));
         assertEquals(1, data.count(new Query().filter("P_MALE > P_FEMALE AND NOT SAMP_POP > 200000")));
+
+        // count with id filters
+        String fid = fidFor(data, "STATE_NAME = 'Texas'");
+        assertEquals(1, data.count(new Query().filter(String.format("IN ('%s')", fid))));
     }
 
     @Test
@@ -124,6 +142,10 @@ public abstract class VectorApiTestBase {
             "TX", "NY", "PA", "NV", "CA");
         assertCovered(
             data.cursor(new Query().filter("P_MALE > P_FEMALE AND NOT SAMP_POP > 200000")), "NV");
+
+        // id filter
+        String fid = fidFor(data, "STATE_NAME = 'Texas'");
+        assertCovered(data.cursor(new Query().filter(String.format("IN ('%s')", fid))), "TX");
     }
 
     void assertNotCovered(Cursor<Feature> cursor, String... abbrs) throws IOException {
@@ -150,5 +172,16 @@ public abstract class VectorApiTestBase {
 
         assertTrue(set.isEmpty());
         assertEquals(abbrs.length, count);
+    }
+
+    String fidFor(VectorDataset dataset, String filter) throws IOException {
+        Cursor<Feature> c = dataset.cursor(new Query().filter(filter));
+        try {
+            assertTrue(c.hasNext());
+            return c.next().getId();
+        }
+        finally {
+            c.close();
+        }
     }
 }

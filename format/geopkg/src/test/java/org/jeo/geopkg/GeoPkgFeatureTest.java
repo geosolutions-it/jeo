@@ -1,3 +1,17 @@
+/* Copyright 2013 The jeo project. All rights reserved.
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *      http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
 package org.jeo.geopkg;
 
 import static org.jeo.Tests.unzip;
@@ -14,7 +28,9 @@ import java.util.List;
 
 import org.apache.commons.io.FileUtils;
 import org.jeo.data.Cursor;
+import org.jeo.data.Cursors;
 import org.jeo.data.Query;
+import org.jeo.data.VectorDataset;
 import org.jeo.feature.BasicFeature;
 import org.jeo.feature.Feature;
 import org.jeo.feature.Features;
@@ -38,8 +54,8 @@ public class GeoPkgFeatureTest extends GeoPkgTestSupport {
 
     @Before
     public void setUp() throws Exception {
-        File dir = unzip(getClass().getResourceAsStream("states.geopackage.zip"), newTmpDir());
-        geopkg = GeoPackage.open(new File(dir, "states.geopackage"));
+        File dir = unzip(getClass().getResourceAsStream("usa.gpkg.zip"), newTmpDir());
+        geopkg = GeoPackage.open(new File(dir, "usa.gpkg"));
     }
 
     @After
@@ -62,7 +78,7 @@ public class GeoPkgFeatureTest extends GeoPkgTestSupport {
         FeatureEntry entry = geopkg.feature("states");
         assertNotNull(entry);
 
-        Schema schema = geopkg.createSchema(entry);
+        Schema schema = geopkg.createSchema(entry, null);
         assertEquals("states", schema.getName());
 
         assertNotNull(schema.geometry());
@@ -113,13 +129,13 @@ public class GeoPkgFeatureTest extends GeoPkgTestSupport {
     @Test
     public void testAdd() throws Exception {
         FeatureEntry entry = geopkg.feature("states");
-        Schema schema = geopkg.schema(entry);
+        Schema schema = geopkg.schema(entry, null);
 
         Geometry g = Geom.point(0,0).buffer(1);
         Feature f = new BasicFeature(null, schema);
         f.put(schema.geometry().getName(), g);
         f.put("STATE_NAME", "JEOLAND");
-        geopkg.add(entry, f);
+        geopkg.insert(entry, f, null);
 
         assertEquals(50, geopkg.count(entry, new Query()));
 
@@ -128,6 +144,37 @@ public class GeoPkgFeatureTest extends GeoPkgTestSupport {
 
         assertEquals("JEOLAND", c.next().get("STATE_NAME"));
         c.close();
+    }
+
+    @Test
+    public void testUpdate() throws Exception {
+        VectorDataset states = (VectorDataset) geopkg.get("states");
+        assertEquals(1, states.count(new Query().filter("STATE_ABBR = 'TX'")));
+        assertEquals(0, states.count(new Query().filter("STATE_ABBR = 'XT'")));
+
+        Cursor<Feature> c = states.cursor(new Query().filter("STATE_NAME = 'Texas'").update());
+        assertTrue(c.hasNext());
+
+        Feature f = c.next();
+        f.put("STATE_ABBR", "XT");
+        c.write().close();
+        
+        assertEquals(0, states.count(new Query().filter("STATE_ABBR = 'TX'")));
+        assertEquals(1, states.count(new Query().filter("STATE_ABBR = 'XT'")));
+    }
+
+    @Test
+    public void testDelete() throws Exception {
+        VectorDataset states = (VectorDataset) geopkg.get("states");
+        assertEquals(49, states.count(new Query()));
+
+        Cursor<Feature> c = states.cursor(new Query().filter("STATE_ABBR = 'TX'").update());
+        assertTrue(c.hasNext());
+        c.next();
+        c.remove().close();
+
+        assertEquals(48, states.count(new Query()));
+        assertEquals(0, states.count(new Query().filter("STATE_NAME = 'Texas'")));
     }
 
     @Test
@@ -140,7 +187,7 @@ public class GeoPkgFeatureTest extends GeoPkgTestSupport {
         entry.setBounds(new Envelope(-180, 180, -90, 90));
         geopkg.create(entry, schema);
 
-        geopkg.add(entry, Features.create(null, schema, Geom.point(1,2), "anvil", 10.99));
+        geopkg.insert(entry, Features.create(null, schema, Geom.point(1,2), "anvil", 10.99), null);
 
         Cursor<Feature> c = geopkg.cursor(entry, new Query());
         try {

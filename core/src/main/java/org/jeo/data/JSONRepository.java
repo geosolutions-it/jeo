@@ -1,3 +1,17 @@
+/* Copyright 2013 The jeo project. All rights reserved.
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *      http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
 package org.jeo.data;
 
 import java.io.BufferedReader;
@@ -11,7 +25,7 @@ import java.util.Map;
 
 import org.jeo.json.JSONObject;
 import org.jeo.json.JSONValue;
-import org.jeo.data.mem.MemWorkspace;
+import org.jeo.filter.Filter;
 import org.jeo.util.Convert;
 import org.jeo.util.Optional;
 import org.slf4j.Logger;
@@ -68,10 +82,12 @@ public class JSONRepository implements DataRepository {
     }
 
     @Override
-    public Iterable<WorkspaceHandle> list() throws IOException {
+    public Iterable<Handle<?>> query(Filter<? super Handle<?>> filter)
+            throws IOException {
+
         JSONObject reg = obj();
 
-        List<WorkspaceHandle> list = new ArrayList<WorkspaceHandle>();
+        List<Handle<?>> list = new ArrayList<Handle<?>>();
         
         for (Object k : reg.keySet()) {
             String key = k.toString();
@@ -95,13 +111,16 @@ public class JSONRepository implements DataRepository {
                 return null;
             }
 
-            list.add(new WorkspaceHandle(key, drv, this));
+            Handle<?> h = Handle.to(key, drv, this);
+            if (filter.apply(h)) {
+                list.add(h);
+            }
         }
         return list;
     }
 
     @Override
-    public Workspace get(String name) throws IOException {
+    public <T> T get(String name, Class<T> type) throws IOException {
         JSONObject reg = obj();
 
         JSONObject wsObj = (JSONObject) reg.get(name);
@@ -144,24 +163,17 @@ public class JSONRepository implements DataRepository {
         
         Object data = drv.open(opts);
         if (data != null) {
-            if (data instanceof Workspace) {
-                return (Workspace) data;
-            }
-            else if (data instanceof Dataset) {
-                return new MemWorkspace((Dataset)data);
-            }
-            else {
-                LOG.debug(
-                    "object: " + obj + " not a workspace or dataset, opts: " + opts);
+            if (data instanceof Dataset) {
+                data = new SingleWorkspace((Dataset)data);
             }
         }
         else {
             LOG.debug("Unable to open from options: " + opts);
         }
 
-        return null;
+        return type.cast(data);
     }
-    
+
     @Override
     public void close() {
     }

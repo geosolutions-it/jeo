@@ -1,3 +1,17 @@
+/* Copyright 2013 The jeo project. All rights reserved.
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *      http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
 package org.jeo.feature;
 
 import java.util.ArrayList;
@@ -5,6 +19,7 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 
+import org.jeo.geom.Geom;
 import org.jeo.proj.Proj;
 import org.osgeo.proj4j.CoordinateReferenceSystem;
 
@@ -25,6 +40,7 @@ import com.vividsolutions.jts.geom.Geometry;
 public class SchemaBuilder {
 
     String name;
+    String uri;
     List<Field> fields = new ArrayList<Field>();
     Map<String,Object> props;
 
@@ -35,6 +51,18 @@ public class SchemaBuilder {
      */
     public SchemaBuilder(String name) {
         this.name = name;
+    }
+
+    /**
+     * Sets the namespace of the schema.
+     * 
+     * @param uri A namespace uri.
+     * 
+     * @return This builder.
+     */
+    public SchemaBuilder uri(String uri) {
+        this.uri = uri;
+        return this;
     }
 
     /**
@@ -103,6 +131,55 @@ public class SchemaBuilder {
     }
 
     /**
+     * Adds fields to the schema being built described by a GeoTools style schema specification
+     * of the form: <pre>&lt;name>:&lt;type>[:srid=&lt;srid>][,...]</pre>
+     * 
+     * @param spec
+     * @return
+     */
+    public SchemaBuilder fields(String spec) {
+        for (String field : spec.split(" *, *")) {
+            String[] split = field.split(" *: *");
+            if (split.length < 1) {
+                throw new IllegalArgumentException("field spec must have at least a name");
+            }
+
+            String name = split[0];
+            Class<?> type;
+            try {
+                type = split.length > 1 ? classForName(split[1]) : Object.class;
+            } catch (ClassNotFoundException e) {
+                throw new IllegalArgumentException("illegal type", e);
+            }
+            CoordinateReferenceSystem crs = null;
+            if (split.length > 2) {
+                String[] srid = split[2].split("=");
+                Integer srs = Integer.parseInt(srid.length > 1 ? srid[1] : srid[0]);
+                crs = Proj.crs(srs);
+            }
+
+            fields.add(new Field(name, type, crs));
+        }
+        return this;
+    }
+
+    Class<?> classForName(String name) throws ClassNotFoundException {
+        if (name.contains(".")) {
+            // already qualified
+            return Class.forName(name);
+        }
+
+        // check for geometry type
+        Geom.Type t = Geom.Type.from(name);
+        if (t != null) {
+            return t.getType();
+        }
+
+        // try in java.lang
+        return Class.forName("java.lang." + name);
+    }
+
+    /**
      * Adds a property to be set on the next field.
      * <p>
      * This value is discarded after the next call to <tt>field()</tt>
@@ -124,6 +201,6 @@ public class SchemaBuilder {
      * Returns the built schema.
      */
     public Schema schema() {
-        return new Schema(name, fields);
+        return new Schema(name, uri, fields);
     }
 }

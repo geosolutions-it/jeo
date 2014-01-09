@@ -1,14 +1,36 @@
+/* Copyright 2013 The jeo project. All rights reserved.
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *      http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
 package org.jeo.data;
 
+import java.io.BufferedReader;
 import java.io.File;
 import java.io.FileNotFoundException;
+import java.io.FileReader;
 import java.io.FilenameFilter;
 import java.io.IOException;
 import java.util.Arrays;
+import java.util.HashMap;
+import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
+import java.util.Map;
 
-import org.jeo.data.mem.MemWorkspace;
+import org.jeo.json.JSONObject;
+import org.jeo.json.JSONValue;
+import org.jeo.util.Pair;
+import org.jeo.filter.Filter;
 import org.jeo.util.Util;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -69,33 +91,81 @@ public class DirectoryRepository implements DataRepository {
     }
 
     @Override
-    public Iterable<WorkspaceHandle> list() throws IOException {
-        // list all files, possibily filtering by extension
-        String[] files = exts == null ? baseDir.list() : baseDir.list(new FilenameFilter() {
+    public Iterable<Handle<?>> query(Filter<? super Handle<?>> filter)
+        throws IOException {
+
+        // list all files, possibly filtering by extension
+        final Map<String,String> metaFiles = new HashMap<String, String>();
+
+        FilenameFilter fileFilter = new FilenameFilter() {
             @Override
             public boolean accept(File dir, String name) {
-                return exts.contains(Util.extension(name));
+                String ext = Util.extension(name);
+                if ("jeo".equalsIgnoreCase(ext)) {
+                    // meta file, save for later
+                    metaFiles.put(Util.base(name), name);
+                    return false;
+                }
+
+                return exts != null ? exts.contains(ext) : true;
             }
-        });
+        };
+
+        String[] files = baseDir.list(fileFilter);
 
         // process files to see what ones we have drivers for
-        LinkedHashSet<WorkspaceHandle> items = new LinkedHashSet<WorkspaceHandle>();
+        LinkedHashSet<Handle<?>> items = new LinkedHashSet<Handle<?>>();
         for (String fn : files) {
-            Driver<?> drv = Drivers.find(new File(baseDir, fn).toURI(), drivers);
-            if (drv != null) {
-                Class<?> t = drv.getType();
-                String name = Util.base(fn);
-                if (Workspace.class.isAssignableFrom(t) || Dataset.class.isAssignableFrom(t)) {
-                    items.add(new WorkspaceHandle(name, drv, this));
+            File file = new File(baseDir, fn);
+            String name = Util.base(fn);
+
+            Driver<?> drv = null;
+
+            // check for a meta file
+            if (metaFiles.containsKey(name)) {
+                File metaFile = new File(baseDir, metaFiles.get(name));
+                Pair<Driver<?>,Map<String,Object>> meta = readMetaFile(metaFile);
+                if (meta != null) {
+                    drv = meta.first();
                 }
+
+                // remove the meta file from the list
+                metaFiles.remove(name);
+            }
+
+            if (drv == null) {
+                drv = Drivers.find(file.toURI(), drivers);
+            }
+
+            if (drv != null) {
+                Handle<?> h = Handle.to(name, drv, this);
+                if (filter.apply(h)) {
+                    items.add(h);
+                }
+            }
+            else {
+                LOG.debug("unable to load driver for file: " + file.getPath());
             }
         }
 
+        // handle left over meta files
+        for (Map.Entry<String, String> e : metaFiles.entrySet()) {
+            String name = e.getKey();
+            File file = new File(baseDir, e.getValue());
+
+            Pair<Driver<?>,Map<String,Object>> meta = readMetaFile(file);
+            if (meta != null) {
+                Handle<?> h = Handle.to(name, meta.first(), this);
+                if (filter.apply(h)) {
+                    items.add(h);
+                }
+            }
+        }
         return items;
     }
 
     @Override
-    public Workspace get(final String key) throws IOException {
+    public <T> T get(final String key, Class<T> type) throws IOException {
         if (exts == null) {
             //search for any file with this base name
             String[] files = baseDir.list(new FilenameFilter() {
@@ -105,7 +175,7 @@ public class DirectoryRepository implements DataRepository {
                 }
             });
             for (String file : files) {
-                return newWorkspaceOrNull(new File(baseDir, file));
+                return objOrNull(new File(baseDir, file), type);
             }
         }
         else {
@@ -113,7 +183,7 @@ public class DirectoryRepository implements DataRepository {
             for (String ext : exts) {
                 File f = new File(baseDir, key + "." + ext);
                 if (f.exists()) {
-                    return newWorkspaceOrNull(f);
+                    return objOrNull(f, type);
                 }
             }
         }
@@ -121,29 +191,105 @@ public class DirectoryRepository implements DataRepository {
         return null;
     }
 
-    Workspace newWorkspaceOrNull(File file) throws IOException {
-        Object obj = Drivers.open(file, drivers);
-        if (obj != null) {
-            if (obj instanceof Workspace) {
-                return (Workspace) obj;
+    @Override
+    public void close() {
+    }
+
+    Pair<Driver<?>,Map<String,Object>> readMetaFile(File f) {
+        try {
+            BufferedReader r = new BufferedReader(new FileReader(f));
+            JSONObject obj = (JSONObject) JSONValue.parseWithException(r);
+
+            // get the driver
+            String drvName = obj.containsKey("driver") ? obj.get("driver").toString() : null;
+            if (drvName == null) {
+                LOG.debug("meta file " + f.getPath() + " specified no driver");
+                return null;
             }
-            else if (obj instanceof Dataset) {
-                return new MemWorkspace((Dataset)obj);
+
+            Driver<?> drv = Drivers.find(drvName, drivers);
+            if (drv == null) {
+                LOG.debug("meta file " + f.getPath() + " specified unknown driver: " + drvName);
+                return null;
+            }
+
+            // read the connection options
+            Map<String,Object> opts = new LinkedHashMap();
+            if (obj.containsKey("options")) {
+                Object optsObj = obj.get("options");
+                if (optsObj instanceof Map) {
+                    opts = (Map) optsObj;
+                }
+                else {
+                    LOG.debug("meta file " + f.getPath() + " 'options' key is not an object");
+                    return null;
+                }
+            }
+
+            // process the options, and turn any relative file urls to absolute ones relative to 
+            // the meta file
+            for (Map.Entry<String, Object> e : opts.entrySet()) {
+               if (FileDriver.FILE.getName().equals(e.getKey())) {
+                   File file = FileDriver.FILE.get(opts);
+                   if (file != null && !file.isAbsolute()) {
+                       file = new File(f.getParentFile(), file.getPath());
+                       e.setValue(file);
+                   }
+               }
+            }
+
+            return new Pair(drv, opts);
+        }
+        catch(Exception e) {
+            LOG.debug("Error parsing meta file: " + f.getPath(), e);
+            return null;
+        } 
+    }
+
+    <T> T objOrNull(File file, Class<T> type) throws IOException {
+        // handle a meta file
+        String base = Util.base(file.getName());
+        String ext = Util.extension(file.getName());
+
+        if ("jeo".equalsIgnoreCase(ext)) {
+            Pair<Driver<?>,Map<String,Object>> meta = readMetaFile(file);
+            if (meta != null) {
+                Object data = meta.first().open(meta.second());
+                return objOrNull(data, file, type);
+            }
+        }
+        else {
+            //check for a sidecar meta file
+            File metaFile = new File(baseDir, base + ".jeo");
+            if (metaFile.exists()) {
+                Pair<Driver<?>,Map<String,Object>> meta = readMetaFile(metaFile);
+                if (meta != null) {
+                    Map<String,Object> opts = meta.second();
+                    opts.put(FileDriver.FILE.getName(), file);
+
+                    return objOrNull(meta.first().open(opts), file, type);
+                }
             }
             else {
-                if (LOG.isDebugEnabled()) {
-                    LOG.debug(
-                        "object: " + obj + " not a workspace or dataset, file: " + file.getPath());
-                }
+                // regular direct file base
+                Object obj = Drivers.open(file, type, drivers);
+                return objOrNull(obj, file, type);
+            }
+        }
+        return null;
+    }
+
+    <T> T objOrNull(Object obj, File file, Class<T> type) throws IOException {
+        if (obj != null) {
+            if (obj instanceof Dataset) {
+                obj = new SingleWorkspace((Dataset) obj);
             }
         }
         else {
             LOG.debug("Unable to open file: " + file.getPath());
         }
         
-        return null;
+        return type.cast(obj);
     }
 
-    public void close() {
-    }
 }

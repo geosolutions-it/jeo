@@ -1,3 +1,17 @@
+/* Copyright 2013 The jeo project. All rights reserved.
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *      http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
 package org.jeo.filter.cql;
 
 import java.io.StringReader;
@@ -234,20 +248,42 @@ public class CQLBuilder extends CQLParser {
         case JJTROUTINEINVOCATION_GEOOP_EQUAL_NODE:
             return;
         case JJTROUTINEINVOCATION_GEOOP_DISJOINT_NODE:
+            h.disjoint();
             return;
         case JJTROUTINEINVOCATION_GEOOP_INTERSECT_NODE:
             h.intersect();
             return;
-            
+
         case JJTROUTINEINVOCATION_GEOOP_TOUCH_NODE:
+            h.touch();
+            return;
+
         case JJTROUTINEINVOCATION_GEOOP_CROSS_NODE:
+            h.cross();
+            return;
+
         case JJTROUTINEINVOCATION_GEOOP_WITHIN_NODE:
+            h.within();
+            return;
+
         case JJTROUTINEINVOCATION_GEOOP_CONTAIN_NODE:
+            h.contain();
+            return;
+
         case JJTROUTINEINVOCATION_GEOOP_OVERLAP_NODE:
+            h.overlap();
+            return;
+
             //return buildBinarySpatialOperator(cqlNode.getType());
 
         case JJTROUTINEINVOCATION_GEOOP_BBOX_NODE:
+            h.bbox();
+            return;
+            
         case JJTROUTINEINVOCATION_GEOOP_BBOX_SRS_NODE:
+            // ignore
+            h.bboxWithSRS();
+            return;
             //return buildBBox(cqlNode.getType());
 
         case JJTROUTINEINVOCATION_GEOOP_RELATE_NODE:
@@ -267,6 +303,7 @@ public class CQLBuilder extends CQLParser {
 
         case JJTROUTINEINVOCATION_RELOP_BEYOND_NODE:
         case JJTROUTINEINVOCATION_RELOP_DWITHIN_NODE:
+            return;
             //return buildDistanceBufferOperator(cqlNode.getType());
 
             // ----------------------------------------

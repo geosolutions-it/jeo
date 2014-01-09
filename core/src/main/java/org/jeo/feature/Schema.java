@@ -1,3 +1,17 @@
+/* Copyright 2013 The jeo project. All rights reserved.
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *      http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
 package org.jeo.feature;
 
 import java.util.Collections;
@@ -19,6 +33,9 @@ public class Schema implements Iterable<Field> {
     /** schema name */
     String name;
 
+    /** schema namespace */
+    String uri;
+
     /** list of fields */
     List<Field> fields;
 
@@ -38,7 +55,19 @@ public class Schema implements Iterable<Field> {
      * @param fields List of fields 
      */
     public Schema(String name, List<Field> fields) {
+        this(name, null, fields);
+    }
+
+    /**
+     * Constructs a new Schema.
+     * 
+     * @param name Name of the schema.
+     * @param uri Namespace of the schema.
+     * @param fields List of fields 
+     */
+    public Schema(String name, String uri, List<Field> fields) {
         this.name = name;
+        this.uri = uri;
         this.fields = Collections.unmodifiableList(fields);
     }
 
@@ -47,6 +76,16 @@ public class Schema implements Iterable<Field> {
      */
     public String getName() {
         return name;
+    }
+
+    /**
+     * Namespace uri of the schema.
+     * <p>
+     * May be <code>null</code>
+     * </p>
+     */
+    public String getURI() {
+        return uri;
     }
 
     /**
@@ -141,5 +180,42 @@ public class Schema implements Iterable<Field> {
             sb.setLength(sb.length()-1);
         }
         return sb.toString();
+    }
+
+    @Override
+    public int hashCode() {
+        final int prime = 31;
+        int result = 1;
+        result = prime * result + ((fields == null) ? 0 : fields.hashCode());
+        result = prime * result + ((name == null) ? 0 : name.hashCode());
+        result = prime * result + ((uri == null) ? 0 : uri.hashCode());
+        return result;
+    }
+
+    @Override
+    public boolean equals(Object obj) {
+        if (this == obj)
+            return true;
+        if (obj == null)
+            return false;
+        if (getClass() != obj.getClass())
+            return false;
+        Schema other = (Schema) obj;
+        if (fields == null) {
+            if (other.fields != null)
+                return false;
+        } else if (!fields.equals(other.fields))
+            return false;
+        if (name == null) {
+            if (other.name != null)
+                return false;
+        } else if (!name.equals(other.name))
+            return false;
+        if (uri == null) {
+            if (other.uri != null)
+                return false;
+        } else if (!uri.equals(other.uri))
+            return false;
+        return true;
     }
 }

@@ -1,3 +1,17 @@
+/* Copyright 2013 The jeo project. All rights reserved.
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *      http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
 package org.jeo.nano;
 
 import java.io.ByteArrayInputStream;
@@ -12,6 +26,8 @@ import java.util.List;
 import java.util.Properties;
 
 import org.jeo.data.DataRepository;
+import org.jeo.data.DataRepositoryView;
+import org.jeo.data.DirectoryRepository;
 import org.jeo.data.mem.MemRepository;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -22,17 +38,17 @@ public class NanoServer extends NanoHTTPD {
 
     static final Logger LOG = LoggerFactory.getLogger(NanoServer.class);
 
-    DataRepository reg;
+    DataRepositoryView reg;
     List<Handler> handlers;
 
     MapRenderer renderer;
 
-    public NanoServer(int port, File wwwRoot, int nThreads, DataRepository reg, List<Handler> handlers) 
+    public NanoServer(int port, File wwwRoot, int nThreads, DataRepositoryView reg, List<Handler> handlers)
         throws IOException {
         this(port, wwwRoot, nThreads, reg, handlers, null);
     }
     
-    public NanoServer(int port, File wwwRoot, int nThreads, DataRepository reg, List<Handler> handlers, 
+    public NanoServer(int port, File wwwRoot, int nThreads, DataRepositoryView reg, List<Handler> handlers,
         MapRenderer renderer) throws IOException {
         super(port, wwwRoot, nThreads);
 
@@ -61,12 +77,12 @@ public class NanoServer extends NanoHTTPD {
             }
         }
 
-        for (Handler h : handlers) {
+        for (Handler h : this.handlers) {
             h.init(this);
         }
     }
 
-    public DataRepository getRegistry() {
+    public DataRepositoryView getRegistry() {
         return reg;
     }
 
@@ -140,23 +156,12 @@ public class NanoServer extends NanoHTTPD {
             usage();
         }
 
-        Integer port = Integer.parseInt(args[0]);
-        File wwwRoot = null;
-        if (args.length > 1) {
-            wwwRoot = new File(args[1]);
-        }
-
+        Opts opts = parseOpts(args);
+        
         // make number of threads configurable
         try {
-            new NanoServer(port, wwwRoot, DEFAULT_NUM_THREADS, loadRegistry(),
+            new NanoServer(opts.port, opts.root, DEFAULT_NUM_THREADS, loadRegistry(opts), 
                 null, null);
-                /*(List)Arrays.asList(new AppsHandler(new File("/Users/jdeolive/Projects/jeo/apps")))
-                new MapRenderer() {
-                    @Override
-                    public void render(Map map, OutputStream output) throws IOException {
-                        Java2D.render(map, output);
-                    }
-                });*/
         } catch (IOException e) {
             throw new RuntimeException(e);
         }
@@ -164,13 +169,48 @@ public class NanoServer extends NanoHTTPD {
         try { System.in.read(); } catch( Throwable t ) {}
     }
 
-    static DataRepository loadRegistry() {
-        return new org.jeo.data.DirectoryRepository(new File("/Users/jdeolive/Documents/Geodata"));
-        //return new MemRepository();
+    static Opts parseOpts(String[] args) {
+        if (args.length % 2 != 0) {
+            usage();
+        }
+
+        Opts opts = new Opts();
+        for (int i = 0; i < args.length; i += 2) {
+            String arg = args[i];
+            if ("-p".equalsIgnoreCase(arg)) {
+                opts.port = Integer.parseInt(args[i+1]);
+            }
+            else if ("-r".equalsIgnoreCase(arg)) {
+                opts.root = new File(args[i+1]);
+            }
+            else if ("-d".equalsIgnoreCase(arg)) {
+                opts.data = new File(args[i+1]);
+            }
+            else {
+                usage();
+            }
+        }
+        return opts;
+    }
+
+    static DataRepositoryView loadRegistry(Opts opts) {
+        DataRepository repo;
+        if (opts.data != null) {
+            repo = new DirectoryRepository(opts.data);
+        } else {
+            repo = new MemRepository();
+        }
+        return new DataRepositoryView(repo);
     }
 
     static void usage() {
-        System.out.println(NanoServer.class.getCanonicalName() + " <port> [<wwwRoot>]");
+        System.out.println(NanoServer.class.getCanonicalName() + "[-p <port>] [-r <root>] [-d <dataRoot>]");
         System.exit(1);
+    }
+
+    static class Opts {
+        Integer port = 8000;
+        File root = null;
+        File data = null;
     }
 }

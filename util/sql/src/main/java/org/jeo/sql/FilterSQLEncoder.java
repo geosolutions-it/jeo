@@ -1,3 +1,17 @@
+/* Copyright 2013 The jeo project. All rights reserved.
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *      http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
 package org.jeo.sql;
 
 import java.sql.Types;
@@ -83,7 +97,7 @@ public class FilterSQLEncoder extends FilterVisitor {
         this.prepared = prepared;
     }
 
-    public String encode(Filter filter, Object obj) {
+    public String encode(Filter<?> filter, Object obj) {
         sql.clear();
         args.clear();
 
@@ -115,8 +129,18 @@ public class FilterSQLEncoder extends FilterVisitor {
             else {
                 if (prepared) {
                     sql.add("?");
-                    args.add(new Pair<Object, Integer>(val, 
-                        val != null ? dbtypes.toSQL(val.getClass()) : Types.NULL));
+
+                    Integer sqlType = null;
+                    if (obj instanceof Field) {
+                        // if field passed in as context use it to determine the type
+                        Field fld = (Field) obj;
+                        sqlType = dbtypes.toSQL(fld.getType());
+                    }
+                    else {
+                        // use the value class
+                        sqlType = dbtypes.toSQL(val.getClass());
+                    }
+                    args.add(new Pair<Object, Integer>(val, sqlType));
                 }
                 else {
                     if (val instanceof Number) {
@@ -177,17 +201,17 @@ public class FilterSQLEncoder extends FilterVisitor {
         return null;
     }
 
-    public final Object visit(All all, Object obj) {
+    public final Object visit(All<?> all, Object obj) {
         sql.add("1 = 1");
         return obj;
     }
 
-    public Object visit(None none, Object obj) {
+    public Object visit(None<?> none, Object obj) {
         sql.add("1 = 0");
         return obj;
     }
 
-    public Object visit(Id id, Object obj) {
+    public Object visit(Id<?> id, Object obj) {
         if (pkey == null) {
             abort(id, "Id filter requires primary key");
         }
@@ -197,15 +221,17 @@ public class FilterSQLEncoder extends FilterVisitor {
 
         PrimaryKeyColumn pkeyCol = pkey.getColumns().get(0);
         sql.name(pkeyCol.getName()).add(" IN (");
+
+        // grab the field for the primary key so we can properly handle the type
         for (Expression e : id.getIds()) {
-            e.accept(this, obj);
+            e.accept(this, pkeyCol.getField());
             sql.add(",");
         }
         sql.trim(1).add(")");
         return obj;
     }
 
-    public Object visit(Logic logic, Object obj) {
+    public Object visit(Logic<?> logic, Object obj) {
         switch(logic.getType()) {
         case NOT:
             sql.add("NOT (");
@@ -214,7 +240,7 @@ public class FilterSQLEncoder extends FilterVisitor {
             break;
         default:
             String op = logic.getType().name();
-            for (Filter f : logic.getParts()) {
+            for (Filter<?> f : logic.getParts()) {
                 sql.add("(");
                 f.accept(this, obj);
                 sql.add(") ").add(op).add(" ");
@@ -225,7 +251,7 @@ public class FilterSQLEncoder extends FilterVisitor {
         return obj;
     }
 
-    public Object visit(Comparison compare, Object obj) {
+    public Object visit(Comparison<?> compare, Object obj) {
         Field fld = field(compare.getLeft(), compare.getRight());
 
         compare.getLeft().accept(this, fld);
@@ -234,7 +260,7 @@ public class FilterSQLEncoder extends FilterVisitor {
         return obj;
     }
 
-    public Object visit(Spatial spatial, Object obj) {
+    public Object visit(Spatial<?> spatial, Object obj) {
         Field fld = field(spatial.getLeft(), spatial.getRight());
         
         String function = null;

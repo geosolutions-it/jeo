@@ -1,27 +1,36 @@
+/* Copyright 2013 The jeo project. All rights reserved.
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *      http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
 package org.jeo.nano;
 
 import static org.jeo.nano.NanoHTTPD.HTTP_OK;
-import static org.jeo.nano.NanoHTTPD.HTTP_BADREQUEST;
-import static org.jeo.nano.NanoHTTPD.HTTP_NOTFOUND;
 import static org.jeo.nano.NanoHTTPD.MIME_JSON;
 
 import java.io.IOException;
 import java.io.StringWriter;
-import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
 import org.jeo.data.Dataset;
-import org.jeo.data.DatasetHandle;
 import org.jeo.data.Disposable;
 import org.jeo.data.Driver;
+import org.jeo.data.Handle;
 import org.jeo.data.Query;
-import org.jeo.data.DataRepository;
 import org.jeo.data.TileDataset;
 import org.jeo.data.TileGrid;
 import org.jeo.data.TilePyramid;
 import org.jeo.data.VectorDataset;
 import org.jeo.data.Workspace;
-import org.jeo.data.WorkspaceHandle;
 import org.jeo.feature.Field;
 import org.jeo.geojson.GeoJSONWriter;
 import org.jeo.geom.Envelopes;
@@ -31,11 +40,12 @@ import org.jeo.util.Pair;
 import org.osgeo.proj4j.CoordinateReferenceSystem;
 
 import com.vividsolutions.jts.geom.Envelope;
+import org.jeo.data.DataRepositoryView;
 
 public class DataHandler extends Handler {
 
     static final Pattern DATA_URI_RE =
-        Pattern.compile("/data(?:/(\\w+)(?:/(\\w+))?)?/?", Pattern.CASE_INSENSITIVE);
+        Pattern.compile("/data(?:/([\\w-]+)(?:/([\\w-]+))?)?/?", Pattern.CASE_INSENSITIVE);
 
     @Override
     public boolean canHandle(Request request, NanoServer server) {
@@ -44,9 +54,9 @@ public class DataHandler extends Handler {
 
     @Override
     public Response handle(Request request, NanoServer server) throws Exception {
-        DataRepository reg = server.getRegistry();
+        DataRepositoryView reg = server.getRegistry();
 
-        Pair<Object,Object> p = findObject(request, reg);
+        Pair<Workspace, ? extends Dataset> p = findWorkspaceOrDataset(request, reg);
 
         StringWriter out = new StringWriter();
         GeoJSONWriter writer = new GeoJSONWriter(out);
@@ -57,18 +67,11 @@ public class DataHandler extends Handler {
         }
         else {
             try {
-                Object obj = p.first();
-                if (obj instanceof Workspace) {
-                    handleWorkspace((Workspace) obj, writer);
-                }
-                else if (obj instanceof Dataset) {
-                    handleDataset((Dataset)obj, writer, request);
-                }
-                else if (obj instanceof Style) {
-                    handleStyle((Style) obj, writer, request);
+                if (p.second() != null) {
+                    handleDataset(p.second(), writer, request);
                 }
                 else {
-                    throw new HttpException(HTTP_BADREQUEST, "unknown object: " + obj);
+                    handleWorkspace(p.first(), writer);
                 }
             }
             finally {
@@ -81,10 +84,10 @@ public class DataHandler extends Handler {
         return new Response(HTTP_OK, MIME_JSON, out.toString());
     }
 
-    void handleAll(DataRepository reg, GeoJSONWriter w) throws IOException {
+    void handleAll(DataRepositoryView reg, GeoJSONWriter w) throws IOException {
         w.object();
         
-        for (WorkspaceHandle item : reg.list()) {
+        for (Handle<?> item : reg.list()) {
             w.key(item.getName()).object();
 
             w.key("type");
@@ -93,7 +96,8 @@ public class DataHandler extends Handler {
                 w.value("workspace");
             }
             else if (Dataset.class.isAssignableFrom(t)) {
-                w.value("dataset");
+                // we represent the dataset as a workspace
+                w.value("workspace");
             }
             else if (Style.class.isAssignableFrom(t)) {
                 w.value("style");
@@ -118,7 +122,7 @@ public class DataHandler extends Handler {
         w.key("driver").value(ws.getDriver().getName());
         w.key("datasets").array();
 
-        for (DatasetHandle ref : ws.list()) {
+        for (Handle<Dataset> ref : ws.list()) {
             w.value(ref.getName());
         }
 
@@ -182,7 +186,7 @@ public class DataHandler extends Handler {
         }
 
         w.endObject();
-        w.key("features").value("/features/" + path(req) + ".json");
+        w.key("features").value("/features/" + createPath(req) + ".json");
     }
 
     void handleTileDataset(TileDataset ds, GeoJSONWriter w, Request req) throws IOException {
@@ -202,55 +206,14 @@ public class DataHandler extends Handler {
         w.endArray();
 
         //TODO: link to first tile?
-        w.key("tiles").value("/tiles/" + path(req));
+        w.key("tiles").value("/tiles/" + createPath(req));
     }
 
     void handleStyle(Style s, GeoJSONWriter w, Request req) throws IOException {
         w.object()
           .key("type").value("style")
-          .key("style").value("/styles/" + path(req))
+          .key("style").value("/styles/" + createPath(req))
           .endObject();
-    }
-
-    Pair<Object,Object> findObject(Request request, DataRepository reg) throws IOException {
-        Matcher m = (Matcher) request.getContext().get(Matcher.class);
-        String first = m.group(1);
-        if (first != null) {
-            String second = m.group(2);
-            if (second != null) {
-                try {
-                    Workspace ws = (Workspace) reg.get(first);
-                    if (ws == null) {
-                        throw new HttpException(HTTP_NOTFOUND, "no such workspace: " + first);
-                    }
-
-                    Dataset ds = ws.get(second);
-                    if (ds == null) {
-                        throw new HttpException(HTTP_NOTFOUND, 
-                            "no such dataset: " + second + " in workspace: " + first);
-                    }
-
-                    return new Pair<Object,Object>(ds, ws);
-                } catch (ClassCastException e) {
-                    throw new HttpException(HTTP_BADREQUEST, first + " is not a workspace");
-                }
-            }
-            else {
-                return Pair.of((Object)reg.get(first), null);
-            }
-        }
-        else {
-            return null;
-        }
-    }
-
-    String path(Request req) {
-        Matcher m = (Matcher) req.getContext().get(Matcher.class);
-        String p = m.group(1);
-        if (m.group(2) != null) {
-            p += "/" + m.group(2);
-        }
-        return p;
     }
 
     void close(Object obj) {
