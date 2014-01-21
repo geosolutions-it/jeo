@@ -17,7 +17,11 @@
     <module>geotools</module>
     <module>guava</module>
     <module>sql</module>
-
+    <module>bench</module>
   </modules>
+
+  <properties>
+    <geotools.version>10.4</geotools.version>
+  </properties>
 
 </project>
